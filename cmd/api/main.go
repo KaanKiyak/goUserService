@@ -43,6 +43,7 @@ func main() {
 	app.Get("/profile", ProfileHandler)
 	app.Post("/register", RegisterHandler)
 	app.Post("/refresh", RefreshHandle)
+	app.Get("/", HomeHandler)
 	err := app.Listen("localhost:8080")
 	if err != nil {
 		panic(err)

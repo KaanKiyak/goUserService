@@ -11,5 +11,5 @@ import (
 // @Success 200 {string} string "Hoş geldin"
 // @Router / [get]
 func HomeHandler(c *fiber.Ctx) error {
-	return c.SendString("Hoş geldin!")
+	return c.SendString("Hoş gelmedin!")
 }

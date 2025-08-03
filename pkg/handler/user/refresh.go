@@ -2,49 +2,9 @@ package user
 
 import (
 	"github.com/gofiber/fiber/v2"
-	"github.com/golang-jwt/jwt/v5"
 	"user-service/pkg/config"
 	"user-service/pkg/handler/utils"
 )
-
-/* func RefreshHandle(c *fiber.Ctx) error {
-	if err := godotenv.Load(); err != nil {
-		log.Fatal("Error loading .env file")
-	}
-	jwtSecret := []byte(os.Getenv("JWT_SECRET"))
-	cookie := c.Cookies("refresh_token")
-	if cookie == "" {
-		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
-			"error": "unauthorized",
-		})
-	}
-	var email string
-	token, err := jwt.Parse(cookie, func(token *jwt.Token) (interface{}, error) {
-		return jwtSecret, nil
-	})
-	if err != nil || !token.Valid {
-		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
-			"error": "unauthorized",
-		})
-	}
-	claims := token.Claims.(jwt.MapClaims)
-	email = claims["email"].(string)
-
-	storedToken, _ := config.Rdb.Get(c.Context(), email).Result()
-	if storedToken != cookie {
-		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
-			"error": "unauthorized",
-		})
-	}
-	newAccessToken, err := utils.GenerateAccessToken(fmt.Sprintf("%d", int(claims["user_id"].(float64))), email)
-	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"error": "token oluşturulamadı",
-		})
-	}
-
-	return c.JSON(fiber.Map{"access_token": newAccessToken})
-}*/
 
 // RefreshHandle access token yeniler
 // @Summary Access Token Yenileme
@@ -57,31 +17,40 @@ import (
 // @Failure 500 {object} ErrorResponse "Sunucu hatası"
 // @Router /refresh [post]
 func RefreshHandle(c *fiber.Ctx) error {
-	cookie := c.Cookies("refresh_token")
-	if cookie == "" {
-		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "no refresh token"})
+	// 1. Cookie’den Refresh Token al
+	refreshToken := c.Cookies("refresh_token")
+	if refreshToken == "" {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "refresh token yok"})
 	}
 
-	token, err := jwt.Parse(cookie, func(token *jwt.Token) (interface{}, error) {
-		return utils.GetJWTSecret(), nil
-	})
-
-	if err != nil || !token.Valid {
-		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "invalid refresh token"})
+	// 2. Refresh Token'ı doğrula
+	claims, err := utils.ParseAccessToken(refreshToken)
+	if err != nil {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "refresh token geçersiz"})
 	}
 
-	claims := token.Claims.(jwt.MapClaims)
-	email := claims["email"].(string)
+	// 3. Claims'ten email, user_id ve uuid al
+	email, ok := claims["email"].(string)
+	if !ok || email == "" {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "geçersiz email"})
+	}
+
 	userID := int(claims["user_id"].(float64))
+	uuid, ok := claims["uuid"].(string)
+	if !ok || uuid == "" {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "geçersiz uuid"})
+	}
 
+	// 4. Redis'ten refresh token doğrula
 	storedToken, _ := config.Rdb.Get(c.Context(), email).Result()
-	if storedToken != cookie {
+	if storedToken != refreshToken {
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "refresh token mismatch"})
 	}
 
-	newAccessToken, err := utils.GenerateAccessToken(userID, email)
+	// 5. Yeni Access Token oluştur
+	newAccessToken, err := utils.GenerateAccessToken(userID, email, uuid)
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "could not generate new token"})
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "token üretilemedi"})
 	}
 
 	return c.JSON(fiber.Map{"access_token": newAccessToken})

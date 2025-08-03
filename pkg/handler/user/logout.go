@@ -1,16 +1,17 @@
 package user
 
 import (
+	"fmt"
 	"github.com/gofiber/fiber/v2"
 	"strings"
-	"time"
 	"user-service/pkg/config"
+	"user-service/pkg/handler/user/model"
 	"user-service/pkg/handler/utils"
 )
 
 // LogoutHandler kullanıcının oturumunu kapatır
 // @Summary Kullanıcı Çıkışı (Logout)
-// @Description Refresh token ve access token doğrulanır, Redis'ten refresh token silinir, cookie temizlenir
+// @Description Refresh token ve access token doğrulanır, Redis'ten refresh token ve session silinir, cookie temizlenir
 // @Tags Auth
 // @Accept json
 // @Produce json
@@ -20,49 +21,65 @@ import (
 // @Failure 500 {object} ErrorResponse "Sunucu hatası"
 // @Router /logout [post]
 func LogoutHandler(c *fiber.Ctx) error {
-	// 1. Cookie'den Refresh Token al
+	// 1. Cookie'den refresh token al
 	refreshToken := c.Cookies("refresh_token")
 	if refreshToken == "" {
-		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
-			"error": "refresh token bulunamadı",
-		})
+		logEvent := model.NewEventLog(nil, "", "", "LOGOUT", "FAILED", "refresh token bulunamadı", c.IP(), c.Get("User-Agent"), c.OriginalURL())
+		logEvent.Save()
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "refresh token bulunamadı"})
 	}
 
-	// 2. Authorization Header'dan Access Token al (isteğe bağlı)
+	// 2. Authorization header'dan access token al
 	authHeader := c.Get("Authorization")
 	if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
-		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
-			"error": "geçersiz token",
-		})
+		logEvent := model.NewEventLog(nil, "", "", "LOGOUT", "FAILED", "geçersiz token", c.IP(), c.Get("User-Agent"), c.OriginalURL())
+		logEvent.Save()
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "geçersiz token"})
 	}
+	accessToken := strings.TrimPrefix(authHeader, "Bearer ")
 
-	// 3. Email bilgisi almak için Refresh Token çözümle
-	claims, err := utils.ParseAccessToken(refreshToken)
+	// 3. Access token parse et
+	claimsAccess, err := utils.ParseAccessToken(accessToken)
 	if err != nil {
-		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
-			"error": "refresh token geçersiz",
-		})
+		logEvent := model.NewEventLog(nil, "", "", "LOGOUT", "FAILED", "access token geçersiz", c.IP(), c.Get("User-Agent"), c.OriginalURL())
+		logEvent.Save()
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "access token geçersiz"})
 	}
 
-	email := claims["email"].(string)
+	// 4. Kullanıcı bilgileri
+	userID := int(claimsAccess["user_id"].(float64))
 
-	// 4. Redis'ten Refresh Token sil
-	err = config.Rdb.Del(c.Context(), email).Err()
-	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"error": "redis'ten token silinemedi",
-		})
+	//  sessionID güvenli al (fallback UNKNOWN)
+	sessionID := "UNKNOWN"
+	if val, ok := claimsAccess["uuid"].(string); ok {
+		sessionID = val
 	}
 
-	// 5. Cookie'yi sil
-	c.Cookie(&fiber.Cookie{
-		Name:     "refresh_token",
-		Value:    "",
-		Expires:  time.Now().Add(-time.Hour),
-		HTTPOnly: true,
-	})
+	// 5. Refresh token parse et
+	claimsRefresh, _ := utils.ParseAccessToken(refreshToken)
+	email := claimsRefresh["email"].(string)
 
-	return c.Status(fiber.StatusOK).JSON(fiber.Map{
-		"message": "logout başarılı",
-	})
+	// 6. Redis'ten refresh token sil
+	if err := config.Rdb.Del(c.Context(), email).Err(); err != nil {
+		logEvent := model.NewEventLog(&userID, email, sessionID, "LOGOUT", "FAILED", "refresh token redis'ten silinemedi", c.IP(), c.Get("User-Agent"), c.OriginalURL())
+		logEvent.Save()
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "redis'ten token silinemedi"})
+	}
+
+	// 7. Redis'ten session sil
+	redisKey := fmt.Sprintf("user:%d:session", userID)
+	if err := config.Rdb.HDel(c.Context(), redisKey, sessionID).Err(); err != nil {
+		logEvent := model.NewEventLog(&userID, email, sessionID, "LOGOUT", "FAILED", "session Redis'ten silinemedi", c.IP(), c.Get("User-Agent"), c.OriginalURL())
+		logEvent.Save()
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "session Redis'ten silinemedi"})
+	}
+
+	// 8. Cookie temizle
+	utils.ClearSetRefreshToken(c)
+
+	//  SUCCESS log
+	logEvent := model.NewEventLog(&userID, email, sessionID, "LOGOUT", "SUCCESS", "", c.IP(), c.Get("User-Agent"), c.OriginalURL())
+	logEvent.Save()
+
+	return c.Status(fiber.StatusOK).JSON(fiber.Map{"message": "logout başarılı"})
 }

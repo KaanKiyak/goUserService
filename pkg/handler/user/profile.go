@@ -7,32 +7,6 @@ import (
 	"user-service/pkg/handler/utils"
 )
 
-/*func ProfileHandler(c *fiber.Ctx) error {
-	var user User
-	authHeader := c.Get("Authorization")
-	if !strings.HasPrefix(authHeader, "Bearer ") {
-		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
-			"error": "invalid token",
-		})
-	}
-	tokenString := strings.TrimPrefix(authHeader, "Bearer ")
-	claims, err := utils.ParseAccessToken(tokenString)
-	if err != nil {
-		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
-			"error": "invalid token",
-		})
-	}
-	userID := int(claims["user_id"].(float64))
-
-	err = config.DB.QueryRow("select id, email, role from users where id = ?", userID).Scan(&user.ID, &user.Email, &user.Role)
-	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"error": "invalid token",
-		})
-	}
-	return c.JSON(user)
-}*/
-
 // ProfileHandler kullanıcı profilini döner
 // @Summary Kullanıcı Profil Bilgisi
 // @Description Bearer token ile giriş yapan kullanıcının profil bilgilerini döner
@@ -45,36 +19,53 @@ import (
 // @Failure 500 {object} ErrorResponse "Sunucu hatası"
 // @Router /profile [get]
 func ProfileHandler(c *fiber.Ctx) error {
-	//authorization
+	// 1. Authorization header kontrolü
 	authHeader := c.Get("Authorization")
 	if !strings.HasPrefix(authHeader, "Bearer ") {
+		model.NewEventLog(nil, "", "", "PROFILE_REQUEST", "FAILED", "authorization header missing or invalid", c.IP(), c.Get("User-Agent"), c.OriginalURL()).Save()
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "invalid token"})
 	}
-	// tokenı ayır
+
+	// 2. Token'ı ayır
 	tokenString := strings.TrimPrefix(authHeader, "Bearer ")
-	// tokenı parse et
+
+	// 3. Token parse et
 	claims, err := model.ParseToken(tokenString)
 	if err != nil {
+		model.NewEventLog(nil, "", "", "PROFILE_REQUEST", "FAILED", "token parse failed", c.IP(), c.Get("User-Agent"), c.OriginalURL()).Save()
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "invalid token"})
 	}
-	//validate
+
+	// 4. JWT doğrula
 	if err := claims.ValidateJWT(string(utils.GetJWTSecret())); err != nil {
+		model.NewEventLog(nil, "", "", "PROFILE_REQUEST", "FAILED", "token validation failed", c.IP(), c.Get("User-Agent"), c.OriginalURL()).Save()
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "invalid token"})
 	}
 
-	//payload expiration time çek
-
-	//payloud user ıd çek
+	// 5. user_id al
 	userIDFloat, ok := claims.Payload["user_id"].(float64)
 	if !ok {
+		model.NewEventLog(nil, "", "", "PROFILE_REQUEST", "FAILED", "user_id missing in token", c.IP(), c.Get("User-Agent"), c.OriginalURL()).Save()
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "invalid token"})
 	}
 	userID := int(userIDFloat)
-	//kullanıcı bilgisini db den çek
+
+	// SessionID (uuid) güvenli al
+	sessionID := "UNKNOWN"
+	if val, ok := claims.Payload["uuid"].(string); ok {
+		sessionID = val
+	}
+
+	// 6. Kullanıcı bilgisi DB'den çek
 	user, err := utils.GetUserByID(userID)
 	if err != nil {
+		model.NewEventLog(&userID, "", sessionID, "PROFILE_REQUEST", "FAILED", "user not found in DB", c.IP(), c.Get("User-Agent"), c.OriginalURL()).Save()
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "invalid token"})
 	}
 
+	// Log SUCCESS
+	model.NewEventLog(&userID, user.Email, sessionID, "PROFILE_REQUEST", "SUCCESS", "", c.IP(), c.Get("User-Agent"), c.OriginalURL()).Save()
+
+	// 7. Kullanıcı bilgisi döndür
 	return c.JSON(user)
 }

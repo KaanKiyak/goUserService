@@ -21,21 +21,24 @@ func GetJWTSecret() []byte {
 }
 
 // Access Token oluştur
-func GenerateAccessToken(userID int, email string) (string, error) {
+func GenerateAccessToken(userID int, email, UUID string) (string, error) {
 	claims := jwt.MapClaims{
 		"user_id": userID,
 		"email":   email,
+		"uuid":    UUID,
 		"exp":     time.Now().Add(5 * time.Minute).Unix(),
 	}
+
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	return token.SignedString(GetJWTSecret())
 }
 
 // Refresh Token oluştur
-func GenerateRefreshToken(userID int, email string) (string, error) {
+func GenerateRefreshToken(userID int, email, UUID string) (string, error) {
 	claims := jwt.MapClaims{
 		"user_id": userID,
 		"email":   email,
+		"uuid":    UUID,
 		"type":    "refresh",
 		"exp":     time.Now().Add(24 * time.Hour).Unix(),
 	}
@@ -82,8 +85,8 @@ func ClearSetRefreshToken(c *fiber.Ctx) {
 }
 func GetUserByID(userID int) (*model.User, error) {
 	var user model.User
-	err := config.DB.QueryRow("SELECT id, name, email, age, password, role FROM users WHERE id = ?", userID).
-		Scan(&user.ID, &user.Name, &user.Email, &user.Age, &user.Password, &user.Role)
+	err := config.DB.QueryRow("SELECT id, uuid, name, email, age, password, role FROM users WHERE id = ?", userID).
+		Scan(&user.ID, &user.UUID, &user.Name, &user.Email, &user.Age, &user.Password, &user.Role)
 	if err != nil {
 		return nil, err
 	}
